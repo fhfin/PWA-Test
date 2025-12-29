@@ -1,0 +1,91 @@
+/**
+ * service worker
+ */
+var cacheName = 'bs-0-2-0';
+var apiCacheName = 'api-0-1-1';
+var cacheFiles = [
+    '/',
+    './index.html',
+    './base64util.js',
+    './index.js',
+    './style.css',
+    './img/book.png',
+    './img/loading.svg'
+];
+
+// 监听install事件，安装完成后，进行文件缓存
+self.addEventListener('install', async (e)=> {
+    console.log('Service Worker 状态： install');
+    const cache = await caches.open(cacheName); // 打开缓存
+    await cache.addAll(cacheFiles); // 添加缓存文件
+    await self.skipWaiting(); // 跳过等待，直接激活
+});
+
+// 监听activate事件，激活后通过cache的key来判断是否更新cache中的静态资源
+self.addEventListener('activate', async (e)=> {
+    console.log('Service Worker 状态： activate');
+    const cacheKeys = await caches.keys(); // 获取所有缓存的key
+    cacheKeys.forEach( key => {
+        if (key !== cacheName && key !== apiCacheName) {
+            caches.delete(key);
+        }
+    });
+    // 注意不能忽略这行代码，否则第一次加载会导致fetch事件不触发
+    await self.clients.claim();
+});
+
+self.addEventListener('fetch', function (e) {
+    // 需要缓存的xhr请求
+    var cacheRequestUrls = [
+        'googleapis.com'
+    ];
+    console.log('现在正在请求：' + e.request.url);
+
+    // 判断当前请求是否需要缓存
+    var needCache = cacheRequestUrls.some(function (url) {
+        return e.request.url.indexOf(url) > -1;
+    });
+
+    if (needCache) {
+        // 需要缓存
+        // 使用fetch请求数据，并将请求结果clone一份缓存到cache
+        // 此部分缓存后在browser中使用全局变量caches获取
+        caches.open(apiCacheName).then(function (cache) { // 打开api缓存
+            return fetch(e.request).then(function (response) {
+                cache.put(e.request.url, response.clone()); // 缓存响应结果
+                return response;
+            });
+        });
+    }
+    else {
+        // 非api请求，直接查询cache
+        // 如果有cache则直接返回，否则通过fetch请求
+        e.respondWith(
+            caches.match(e.request).then(function (cache) { // 查询缓存
+                return cache || fetch(e.request); // 如果有缓存则返回，否则通过fetch请求
+            }).catch(function (err) {
+                console.log(err);
+                return fetch(e.request); // 如果查询缓存失败，则通过fetch请求
+            })
+        );
+    }
+});
+
+/* ============== */
+/* push处理相关部分 */
+/* ============== */
+// 添加service worker对push的监听
+self.addEventListener('push', function (e) {
+    var data = e.data;
+    if (e.data) {
+        data = data.json();
+        console.log('push的数据为：', data);
+        self.registration.showNotification('通知',{
+            body: data.text,
+        });        
+    } 
+    else {
+        console.log('push没有任何数据');
+    }
+});
+/* ============== */
