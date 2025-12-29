@@ -233,7 +233,9 @@
             userVisibleOnly: true,
             applicationServerKey: window.urlBase64ToUint8Array(publicKey)
         }; 
+        // 订阅用户的push信息,浏览器会提示用户是否同意接收推送信息
         return registration.pushManager.subscribe(subscribeOptions).then(function (pushSubscription) {
+            // 订阅成功后，将pushSubscription数据提交到服务端
             console.log('Received PushSubscription: ', JSON.stringify(pushSubscription));
             return pushSubscription;
         });
@@ -292,9 +294,11 @@
             }
 
             if (serviceWorker) {
+                // 等待 Service Worker 激活后再订阅
                 if (serviceWorker.state === 'activated') {
                     return subscribeUserToPush(registration, publicKey);
                 }
+                // 监听 Service Worker 状态变化，等待激活后再订阅
                 return new Promise(function(resolve, reject) {
                     serviceWorker.addEventListener('statechange', function(e) {
                         if (e.target.state === 'activated') {

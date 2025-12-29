@@ -1,5 +1,4 @@
 const util      = require('./util');
-const http      = require('http');
 const Koa       = require('koa');
 const serve     = require('koa-static');
 const Router    = require('koa-router');
@@ -10,34 +9,12 @@ const port = process.env.PORT || 8085;
 const app = new Koa();
 const router = new Router();
 
-/**
- * 根据关键词获取图书信息
- */
-router.get('/book', async (ctx, next) => {
-    let query = ctx.request.query;
-    let {q, fields} = query;
-    // 替换为 Google Books API
-    let url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}`;
-    let res = await util.get(url);
-    ctx.response.body = res;
-});
-
-/* ===================== */
-/* 使用web-push进行消息推送 */
-/* ===================== */
-const options={
-    // proxy: 'http://localhost:1087',
-};
-
-/**
- * VAPID值
- */
+// VAPID keys
 const vapidKeys = {
     publicKey: 'BOEQSjdhorIf8M0XFNlwohK3sTzO9iJwvbYU-fuXRF0tvRpPPMGO6d_gJC_pUQwBT7wD8rKutpNTFHOHN3VqJ0A',
     privateKey: 'TVe_nJlciDOn130gFyFYP8UiGxxWd3QdH6C5axXpSgM'
 };
 
-// 设置web-push的VAPID值
 webpush.setVapidDetails(
     'mailto:13979788219@163.com',
     vapidKeys.publicKey,
@@ -50,55 +27,42 @@ webpush.setVapidDetails(
 router.post('/subscription', koaBody(), async ctx => {
     let body = ctx.request.body;
     await util.saveRecord(body);
-    ctx.response.body = {
-        status: 0
-    };
+    ctx.response.body = { status: 0 };
 });
-
 
 /**
  * 向push service推送信息
- * @param {*} subscription 
- * @param {*} data 
  */
 function pushMessage(subscription, data = {}) {
-    webpush.sendNotification(subscription, data, options).then(data => {
-        console.log('push service的相应数据:', JSON.stringify(data));
-        return;
+    webpush.sendNotification(subscription, data, {}).then(data => {
+        console.log('push service response:', JSON.stringify(data));
     }).catch(err => {
-        // 判断状态码，440和410表示失效
         if (err.statusCode === 410 || err.statusCode === 404) {
             return util.remove(subscription);
         }
-        else {
-            console.log(subscription);
-            console.log(err);
-        }
-    })
+        console.log('Push error:', err);
+    });
 }
 
 /**
- * 消息推送API，可以在管理后台进行调用
- * 本例子中，可以直接post一个请求来查看效果
+ * 消息推送API
  */
 router.post('/push', koaBody(), async ctx => {
     let payload = ctx.request.body;    
     let list = await util.findAll();
-    let status = list.length > 0 ? 0 : -1;
-
-    for (let i = 0; i < list.length; i++) {
-        let subscription = list[i];
+    
+    list.forEach(subscription => {
         pushMessage(subscription, JSON.stringify(payload));
-    }
+    });
 
     ctx.response.body = {
-        status
+        status: list.length > 0 ? 0 : -1
     };
 });
-/* ===================== */
 
 app.use(router.routes());
 app.use(serve(__dirname + '/public'));
+
 app.listen(port, () => {
-    console.log(`listen on port: ${port}`);
+    console.log(`Server is running on port ${port}`);
 });
