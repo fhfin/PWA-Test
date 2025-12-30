@@ -1,4 +1,4 @@
-(function() {
+(async function() {
     /**
      * 生成书籍列表卡片（dom元素）
      * @param {Object} book 书籍相关数据
@@ -167,14 +167,13 @@
      * @param {string} url 请求的url
      * @return {Promise}
      */
-    function getApiDataFromCache(url) {
+    async function getApiDataFromCache(url) {
         if ('caches' in window) {
-            return caches.match(url).then(function (cache) {
-                if (!cache) {
-                    return;
-                }
-                return cache.json();
-            });
+            const cache = await caches.match(url);
+            if (!cache) {
+                return;
+            }
+            return cache.json();
         }
         else {
             return Promise.resolve();
@@ -208,12 +207,7 @@
         });
     }
 
-    /* ========================== */
-    /* service worker push相关部分 */
-    /* ========================== */
     /**
-     * 注意这里修改了前一篇文章中service worker注册部分的代码
-     * 将service worker的注册封装为一个方法，方便使用
      * @param {string} file service worker文件路径
      * @return {Promise}
      */
@@ -228,17 +222,40 @@
      * @param {string} publicKey 公钥
      * @return {Promise}
      */
-    function subscribeUserToPush(registration, publicKey) {
+    async function subscribeUserToPush(registration, publicKey) {
         var subscribeOptions = {
             userVisibleOnly: true,
             applicationServerKey: window.urlBase64ToUint8Array(publicKey)
         }; 
         // 订阅用户的push信息,浏览器会提示用户是否同意接收推送信息
-        return registration.pushManager.subscribe(subscribeOptions).then(function (pushSubscription) {
-            // 订阅成功后，将pushSubscription数据提交到服务端
-            console.log('Received PushSubscription: ', JSON.stringify(pushSubscription));
-            return pushSubscription;
-        });
+        const pushSubscription = await registration.pushManager.subscribe(subscribeOptions);
+        // 订阅成功后，将pushSubscription数据提交到服务端
+        console.log('Received PushSubscription: ', JSON.stringify(pushSubscription));
+        return pushSubscription;
+    }
+
+    /**
+     * 获取用户订阅信息
+     * @return {Promise}
+     */
+    async function getSubscription(registration, publicKey) {
+        if(serviceWorker){
+            // 等待 Service Worker 激活后再订阅
+            if (serviceWorker.state === 'activated') {
+                return await subscribeUserToPush(registration, publicKey);
+            } else {
+                // 监听 Service Worker 状态变化，等待激活后再订阅
+                return await new Promise(function(resolve, reject) {
+                    serviceWorker.addEventListener('statechange', function(e) {
+                        if (e.target.state === 'activated') {
+                            resolve(subscribeUserToPush(registration, publicKey));
+                        }
+                    });
+                });
+            }
+        }else{
+            return await subscribeUserToPush(registration, publicKey);
+        }
     }
 
     /**
@@ -277,46 +294,86 @@
         });
     }
 
+    /**
+     * 请求用户订阅通知权限
+     * @return {Promise}
+     */
+    async function askPermission(){
+        const permissionResult = await Notification.requestPermission();
+        if (permissionResult !== 'granted') {
+            throw new Error('用户拒绝了通知权限');
+        }
+        return permissionResult;
+    }
+
+    function addNotificationEvent(registration){
+        document.querySelector('#js-notification-btn').addEventListener('click', async function(){
+            var title = 'PWA即学即用'
+            var options = {
+                body:'邀请你一起学习',
+                icon:'/img/icons/book-128.png',
+                actions:[{
+                    action:'show-book',
+                    title:'去看看'
+                },{
+                    action:'contact-me',
+                    title:'联系我'
+                }],
+                tag:'pwa-starter',
+                renotify:true
+            }
+            // 显示通知
+            registration.showNotification(title, options);
+        });
+    }
+
     if ('serviceWorker' in navigator && 'PushManager' in window) {
         var publicKey = 'BOEQSjdhorIf8M0XFNlwohK3sTzO9iJwvbYU-fuXRF0tvRpPPMGO6d_gJC_pUQwBT7wD8rKutpNTFHOHN3VqJ0A';
         // 注册service worker
-        registerServiceWorker('./sw.js').then(function (registration) {
-            console.log('Service Worker 注册成功');
-            
-            // 等待 Service Worker 激活后再订阅
-            var serviceWorker;
-            if (registration.installing) {
-                serviceWorker = registration.installing;
-            } else if (registration.waiting) {
-                serviceWorker = registration.waiting;
-            } else if (registration.active) {
-                serviceWorker = registration.active;
-            }
+        const registration = await registerServiceWorker('./sw.js');
 
-            if (serviceWorker) {
-                // 等待 Service Worker 激活后再订阅
-                if (serviceWorker.state === 'activated') {
-                    return subscribeUserToPush(registration, publicKey);
-                }
-                // 监听 Service Worker 状态变化，等待激活后再订阅
-                return new Promise(function(resolve, reject) {
-                    serviceWorker.addEventListener('statechange', function(e) {
-                        if (e.target.state === 'activated') {
-                            resolve(subscribeUserToPush(registration, publicKey));
-                        }
-                    });
-                });
-            } else {
-                 return subscribeUserToPush(registration, publicKey);
+        // 等待 Service Worker 激活后再订阅
+        var serviceWorker;
+        if (registration.installing) {
+            serviceWorker = registration.installing;
+        } else if (registration.waiting) {
+            serviceWorker = registration.waiting;
+        } else if (registration.active) {
+            serviceWorker = registration.active;
+        }
+        
+        // 请求用户订阅通知权限
+        await askPermission();
+
+        // 添加通知事件
+        addNotificationEvent(registration);
+
+        // 获取用户订阅信息
+        const subscription = await getSubscription(registration, publicKey);
+        console.log('用户订阅信息：', subscription);
+        
+        // 如果订阅成功，将subscription信息提交到服务端
+        if (subscription) {
+            await sendSubscriptionToServer(JSON.stringify(subscription));
+        }
+    }
+
+    /* ======= 消息通信 ======= */
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', function (e) {
+            var action = e.data;
+            console.log(`receive post-message from sw, action is '${e.data}'`);
+            switch (action) {
+                case 'show-book':
+                    location.href = 'https://baidu.com';
+                    break;
+                case 'contact-me':
+                    location.href = 'mailto:13979788219@163.com';
+                    break;
+                default:
+                    break;
             }
-        }).then(function (subscription) {
-            // 将生成的客户端订阅信息存储在自己的服务器上
-            return sendSubscriptionToServer(JSON.stringify(subscription));
-        }).then(function (res) {
-            console.log(res);
-        }).catch(function (err) {
-            console.log(err);
         });
     }
-    /* ========================== */
+    /* ======================= */
 })();

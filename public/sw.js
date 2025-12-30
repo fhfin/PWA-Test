@@ -50,12 +50,24 @@ self.addEventListener('fetch', function (e) {
         // 需要缓存
         // 使用fetch请求数据，并将请求结果clone一份缓存到cache
         // 此部分缓存后在browser中使用全局变量caches获取
-        caches.open(apiCacheName).then(function (cache) { // 打开api缓存
-            return fetch(e.request).then(function (response) {
-                cache.put(e.request.url, response.clone()); // 缓存响应结果
-                return response;
-            });
-        });
+        e.respondWith(
+            caches.open(apiCacheName).then(async function (cache) { // 打开api缓存
+                try {
+                    const response = await fetch(e.request);
+                    cache.put(e.request.url, response.clone()); // 缓存响应结果
+                    return response; // 返回响应结果
+                } catch (err) {
+                    // 如果 fetch 失败（例如离线），则尝试从缓存读取
+                    const cachedResponse = await cache.match(e.request);
+                    if (cachedResponse) {
+                        return cachedResponse;
+                    }
+                    self.registration.showNotification('网络错误', {
+                        body: '您似乎离线了，无法访问该资源。',
+                    });
+                }
+            })
+        );
     }
     else {
         // 非api请求，直接查询cache
@@ -80,12 +92,62 @@ self.addEventListener('push', function (e) {
     if (e.data) {
         data = data.json();
         console.log('push的数据为：', data);
-        self.registration.showNotification('通知',{
-            body: data.text,
-        });        
+        var title = 'PWA即学即用'
+        var options = {
+            body:data.text,
+            icon:'/img/icons/book-128.png',
+            image:'/img/icons/books-512.png',
+            actions:[{
+                action:'show-book',
+                title:'去看看'
+            },{
+                action:'contact-me',
+                title:'联系我'
+            }],
+            tag:'pwa-starter',
+            renotify:true
+        }
+        self.registration.showNotification(title,options);        
     } 
     else {
         console.log('push没有任何数据');
     }
 });
 /* ============== */
+
+/* ======================== */
+/* notification demo相关部分 */
+/* ======================= */
+self.addEventListener('notificationclick', function (e) {
+    var action = e.action;
+    console.log(`action tag: ${e.notification.tag}`, `action: ${action}`);
+    
+    switch (action) {
+        case 'show-book':
+            console.log('show-book');
+            break;
+        case 'contact-me':
+            console.log('contact-me');
+            break;
+        default:
+            console.log(`未处理的action: ${e.action}`);
+            action = 'default';
+            break;
+    }
+    e.notification.close();
+
+    e.waitUntil(
+        // 获取所有clients
+        self.clients.matchAll().then(function (clients) {
+            if (!clients || clients.length === 0) {
+                self.clients.openWindow && self.clients.openWindow('http://127.0.0.1:8085');
+                return;
+            }
+            clients[0].focus && clients[0].focus();
+            clients.forEach(function (client) {
+                // 使用postMessage进行通信
+                client.postMessage(action);
+            });
+        })
+    );
+});
